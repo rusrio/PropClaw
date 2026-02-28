@@ -34,6 +34,8 @@ const RECEIVER = process.env.PAYMENT_RECEIVER_ADDRESS!;
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const isTestnet = process.env.HYPERLIQUID_TESTNET === "true";
 const bypassPnl = process.env.BYPASS_PNL_CHECK === "true";
+const FAUCET_ID = process.env.OPENFORT_FAUCET_ID || "";
+const INITIAL_CAPITAL = process.env.INITIAL_CAPITAL || "50";
 
 // ─── Openfort TEE Setup ─────────────────────────────────────────────────────
 
@@ -41,9 +43,26 @@ const openfort = new Openfort(process.env.OPENFORT_API_KEY!, {
   walletSecret: process.env.OPENFORT_WALLET_SECRET,
 });
 
+// ─── Faucet: Master TEE Wallet for auto-funding new agents ──────────────────
+
+let faucetClient: hl.ExchangeClient | null = null;
+
+async function getFaucetClient(): Promise<hl.ExchangeClient | null> {
+  if (!FAUCET_ID) return null;
+  if (faucetClient) return faucetClient;
+  try {
+    const faucetAccount = await openfort.accounts.evm.backend.get({ id: FAUCET_ID });
+    faucetClient = new hl.ExchangeClient({ wallet: faucetAccount, transport });
+    console.log("💰 Faucet TEE wallet loaded:", faucetAccount.address);
+    return faucetClient;
+  } catch (e: any) {
+    console.error("⚠️ Failed to load faucet wallet:", e.message);
+    return null;
+  }
+}
+
 // ─── Database Initialization ────────────────────────────────────────────────
 
-// We no longer preload private keys from the environment.
 // Funded wallets are generated or assigned dynamically via Openfort TEE on evaluate.
 
 // ─── Hyperliquid ────────────────────────────────────────────────────────────
@@ -190,17 +209,39 @@ app.post("/evaluate", async (req, res) => {
     // 4. Assign or Create funded wallet via Openfort
     let wallet = getAvailableWallet();
     if (!wallet) {
-      // Create a new Backend Wallet in the TEE for this approved agent
-      const newAccount = await openfort.accounts.evm.backend.create();
-      wallet = {
-        apiId: newAccount.id,
-        address: newAccount.address,
-        assigned_to: null
-      };
-      saveWallet(wallet);
+      try {
+        console.log("Requesting new Backend Wallet from Openfort TEE...");
+        // Create a new Backend Wallet in the TEE for this approved agent
+        const newAccount = await openfort.accounts.evm.backend.create();
+        console.log("Successfully created TEE wallet:", newAccount.id);
+        wallet = {
+          apiId: newAccount.id,
+          address: newAccount.address,
+          assigned_to: null
+        };
+        saveWallet(wallet);
+      } catch (e: any) {
+        console.error("Openfort API Error:", e.response?.data || e.message || e);
+        res.status(500).json({ error: "Failed to provision TEE wallet from Openfort", details: e.message });
+        return;
+      }
     }
 
-    // 5. Get initial capital
+    // 5. Auto-fund from Master Faucet TEE wallet
+    try {
+      const faucet = await getFaucetClient();
+      if (faucet) {
+        console.log(`💸 Transferring ${INITIAL_CAPITAL} USDC from Faucet → ${wallet.address}`);
+        await faucet.usdSend({ destination: wallet.address as `0x${string}`, amount: INITIAL_CAPITAL });
+        console.log("✅ Faucet transfer complete!");
+      } else {
+        console.warn("⚠️ No OPENFORT_FAUCET_ID configured — skipping auto-fund.");
+      }
+    } catch (e: any) {
+      console.error("⚠️ Faucet transfer failed (agent still approved):", e.message);
+    }
+
+    // 6. Get initial capital
     let initialCapital = 0;
     try {
       const bal = await getBalance(wallet.address);
