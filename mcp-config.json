@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "openclaw-trading": {
+      "command": "npx",
+      "args": ["tsx", "src/mcp-server.ts"],
+      "cwd": "/home/ubuntu/projects/testhl",
+      "env": {
+        "DOTENV_PATH": ".env"
+      }
+    }
+  }
+}
