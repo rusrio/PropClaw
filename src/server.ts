@@ -13,8 +13,19 @@ import {
   CancelInputSchema,
   RISK_GATES,
   type Agent,
-  type FundedWallet,
 } from "./types.js";
+import {
+  db,
+  getAgent,
+  getAgentByHyperliquidAddress,
+  getAllAgents,
+  saveAgent,
+  getAvailableWallet,
+  getWalletForAgent,
+  saveWallet,
+  assignWallet,
+  getFundedWalletsCount
+} from "./db.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -23,21 +34,14 @@ const PORT = parseInt(process.env.PORT || "3000", 10);
 const isTestnet = process.env.HYPERLIQUID_TESTNET === "true";
 const bypassPnl = process.env.BYPASS_PNL_CHECK === "true";
 
-// ─── In-Memory Storage ──────────────────────────────────────────────────────
+// ─── Database Initialization ────────────────────────────────────────────────
 
-const agents = new Map<string, Agent>();
-const wallets: FundedWallet[] = [];
-
-// Load funded wallets from env
+// Load funded wallets from env into DB if they don't exist
 const rawKeys = (process.env.FUNDED_WALLETS || "").split(",").filter(Boolean);
 for (const key of rawKeys) {
   const pk = (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`;
   const account = privateKeyToAccount(pk);
-  wallets.push({ privateKey: pk, address: account.address, assigned_to: null });
-}
-
-function findFreeWallet(): FundedWallet | null {
-  return wallets.find((w) => w.assigned_to === null) || null;
+  saveWallet({ privateKey: pk, address: account.address, assigned_to: null });
 }
 
 // ─── Hyperliquid ────────────────────────────────────────────────────────────
@@ -154,11 +158,10 @@ app.post("/evaluate", async (req, res) => {
     const addr = input.hyperliquid_address;
 
     // 1. Check if already registered
-    for (const agent of agents.values()) {
-      if (agent.hl_address.toLowerCase() === addr.toLowerCase()) {
-        res.json({ status: "already_registered", agent });
-        return;
-      }
+    const existingAgent = getAgentByHyperliquidAddress(addr);
+    if (existingAgent) {
+      res.json({ status: "already_registered", agent: existingAgent });
+      return;
     }
 
     // 2. Verify wallet ownership (sign "OpenClaw Prop Firm: authorize 0x...")
@@ -183,7 +186,7 @@ app.post("/evaluate", async (req, res) => {
     }
 
     // 4. Assign funded wallet
-    const wallet = findFreeWallet();
+    const wallet = getAvailableWallet();
     if (!wallet) {
       res.status(503).json({ error: "No funded wallets available. Try again later." });
       return;
@@ -210,8 +213,8 @@ app.post("/evaluate", async (req, res) => {
       created_at: new Date().toISOString(),
     };
 
-    wallet.assigned_to = agent.id;
-    agents.set(agent.id, agent);
+    assignWallet(wallet.address, agent.id);
+    saveAgent(agent);
 
     res.json({
       status: metrics.passes ? "approved" : "approved_bypass",
@@ -234,7 +237,7 @@ app.post("/evaluate", async (req, res) => {
 app.post("/trade", async (req, res) => {
   try {
     const input = TradeInputSchema.parse(req.body);
-    const agent = agents.get(input.agent_id);
+    const agent = getAgent(input.agent_id);
 
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
@@ -252,7 +255,7 @@ app.post("/trade", async (req, res) => {
     }
 
     // Drawdown check
-    const wallet = wallets.find((w) => w.assigned_to === agent.id);
+    const wallet = getWalletForAgent(agent.id);
     if (!wallet) {
       res.status(500).json({ error: "No wallet assigned" });
       return;
@@ -267,6 +270,7 @@ app.post("/trade", async (req, res) => {
 
       if (drawdown >= RISK_GATES.DRAWDOWN_KILL) {
         agent.status = "revoked";
+        saveAgent(agent);
         res.status(403).json({
           error: "Access revoked: drawdown exceeded 10%",
           drawdown: `${(drawdown * 100).toFixed(1)}%`,
@@ -365,6 +369,8 @@ app.post("/trade", async (req, res) => {
       }
     } catch { /* fills check optional */ }
 
+    saveAgent(agent); // Save updated agent state
+
     res.json({
       status: "executed",
       agent_id: agent.id,
@@ -387,20 +393,21 @@ app.post("/trade", async (req, res) => {
 app.post("/cancel", async (req, res) => {
   try {
     const input = CancelInputSchema.parse(req.body);
-    const agent = agents.get(input.agent_id);
+    const agent = getAgent(input.agent_id);
 
     if (!agent) {
       res.status(404).json({ error: "Agent not found" });
       return;
     }
+
     if (agent.status === "revoked") {
-      res.status(403).json({ error: "Agent access revoked due to drawdown" });
+      res.status(403).json({ error: "Agent access has been revoked" });
       return;
     }
 
-    const wallet = wallets.find((w) => w.assigned_to === agent.id);
+    const wallet = getWalletForAgent(agent.id);
     if (!wallet) {
-      res.status(400).json({ error: "No wallet assigned" });
+      res.status(500).json({ error: "No wallet assigned" });
       return;
     }
 
@@ -435,18 +442,18 @@ app.post("/cancel", async (req, res) => {
 // ─── GET /open_orders/:agent_id ─────────────────────────────────────────────
 
 app.get("/open_orders/:agent_id", async (req, res) => {
-  const agent = agents.get(req.params.agent_id);
-  if (!agent) {
-    res.status(404).json({ error: "Agent not found" });
-    return;
-  }
-  const wallet = wallets.find((w) => w.assigned_to === agent.id);
-  if (!wallet) {
-    res.status(400).json({ error: "No wallet assigned" });
-    return;
-  }
-
   try {
+    const agent = getAgent(req.params.agent_id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    const wallet = getWalletForAgent(agent.id);
+    if (!wallet) {
+      res.status(500).json({ error: "No wallet assigned" });
+      return;
+    }
+
     const openOrders = await infoClient.openOrders({ user: wallet.address as `0x${string}` });
     res.json({ open_orders: openOrders });
   } catch (err) {
@@ -458,18 +465,18 @@ app.get("/open_orders/:agent_id", async (req, res) => {
 // ─── GET /positions/:agent_id ───────────────────────────────────────────────
 
 app.get("/positions/:agent_id", async (req, res) => {
-  const agent = agents.get(req.params.agent_id);
-  if (!agent) {
-    res.status(404).json({ error: "Agent not found" });
-    return;
-  }
-  const wallet = wallets.find((w) => w.assigned_to === agent.id);
-  if (!wallet) {
-    res.status(400).json({ error: "No wallet assigned" });
-    return;
-  }
-
   try {
+    const agent = getAgent(req.params.agent_id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    const wallet = getWalletForAgent(agent.id);
+    if (!wallet) {
+      res.status(500).json({ error: "No wallet assigned" });
+      return;
+    }
+
     const state = await infoClient.clearinghouseState({ user: wallet.address as `0x${string}` });
     const positions = state.assetPositions.map(p => p.position);
     res.json({ positions, marginSummary: state.marginSummary });
@@ -532,35 +539,39 @@ app.get("/funding/:coin", async (req, res) => {
 // ─── GET /stats/:agent_id ───────────────────────────────────────────────────
 
 app.get("/stats/:agent_id", async (req, res) => {
-  const agent = agents.get(req.params.agent_id);
-  if (!agent) {
-    res.status(404).json({ error: "Agent not found" });
-    return;
-  }
-
-  let balance = null;
   try {
-    balance = await getBalance(agent.funded_wallet_address);
-  } catch { /* may not be funded yet */ }
+    const agent = getAgent(req.params.agent_id);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
 
-  res.json({ agent, balance, risk_gates: RISK_GATES });
+    let balance = null;
+    try {
+      balance = await getBalance(agent.funded_wallet_address);
+    } catch { /* may not be funded yet */ }
+
+    res.json({ agent, balance, risk_gates: RISK_GATES });
+  } catch (err) {
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // ─── GET /agents ────────────────────────────────────────────────────────────
 
 app.get("/agents", (_req, res) => {
   const status = (_req.query.status as string) || "all";
-  let list = Array.from(agents.values());
-  if (status !== "all") list = list.filter((a) => a.status === status);
+  const list = getAllAgents(status);
   res.json({ agents: list, count: list.length });
 });
 
 // ─── Start ──────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
+  const counts = getFundedWalletsCount();
   console.log(`🚀 AI Prop Firm running on :${PORT}`);
   console.log(`   Hyperliquid: ${isTestnet ? "testnet" : "mainnet"}`);
   console.log(`   PnL bypass: ${bypassPnl}`);
-  console.log(`   Funded wallets: ${wallets.length} (${wallets.filter(w => !w.assigned_to).length} free)`);
+  console.log(`   Funded wallets: ${counts.total} (${counts.free} free)`);
   console.log(`   x402 receiver: ${RECEIVER}`);
 });

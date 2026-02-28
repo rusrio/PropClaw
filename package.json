@@ -16,12 +16,15 @@
     "@x402/evm": "^2.5.0",
     "@x402/express": "^2.5.0",
     "@x402/fetch": "^2.5.0",
+    "better-sqlite3": "^12.6.2",
+    "convex": "^1.32.0",
     "dotenv": "^16.5.0",
     "express": "^4.21.2",
     "viem": "^2.23.2",
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.0",
     "@types/node": "^22.13.5",
     "tsx": "^4.19.3",
