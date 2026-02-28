@@ -34,7 +34,7 @@ const RECEIVER = process.env.PAYMENT_RECEIVER_ADDRESS!;
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const isTestnet = process.env.HYPERLIQUID_TESTNET === "true";
 const bypassPnl = process.env.BYPASS_PNL_CHECK === "true";
-const FAUCET_ID = process.env.OPENFORT_FAUCET_ID || "";
+const FAUCET_KEY = process.env.FAUCET_PRIVATE_KEY || "";
 const INITIAL_CAPITAL = process.env.INITIAL_CAPITAL || "50";
 
 // ─── Openfort TEE Setup ─────────────────────────────────────────────────────
@@ -43,17 +43,17 @@ const openfort = new Openfort(process.env.OPENFORT_API_KEY!, {
   walletSecret: process.env.OPENFORT_WALLET_SECRET,
 });
 
-// ─── Faucet: Master TEE Wallet for auto-funding new agents ──────────────────
+// ─── Faucet: Master Wallet for auto-funding new agents ─────────────────────
 
 let faucetClient: hl.ExchangeClient | null = null;
 
-async function getFaucetClient(): Promise<hl.ExchangeClient | null> {
-  if (!FAUCET_ID) return null;
+function getFaucetClient(): hl.ExchangeClient | null {
+  if (!FAUCET_KEY) return null;
   if (faucetClient) return faucetClient;
   try {
-    const faucetAccount = await openfort.accounts.evm.backend.get({ id: FAUCET_ID });
-    faucetClient = new hl.ExchangeClient({ wallet: faucetAccount, transport });
-    console.log("💰 Faucet TEE wallet loaded:", faucetAccount.address);
+    const faucetWallet = privateKeyToAccount(FAUCET_KEY as `0x${string}`);
+    faucetClient = new hl.ExchangeClient({ wallet: faucetWallet, transport });
+    console.log("💰 Faucet wallet loaded:", faucetWallet.address);
     return faucetClient;
   } catch (e: any) {
     console.error("⚠️ Failed to load faucet wallet:", e.message);
@@ -227,15 +227,15 @@ app.post("/evaluate", async (req, res) => {
       }
     }
 
-    // 5. Auto-fund from Master Faucet TEE wallet
+    // 5. Auto-fund from Master Faucet wallet
     try {
-      const faucet = await getFaucetClient();
+      const faucet = getFaucetClient();
       if (faucet) {
         console.log(`💸 Transferring ${INITIAL_CAPITAL} USDC from Faucet → ${wallet.address}`);
         await faucet.usdSend({ destination: wallet.address as `0x${string}`, amount: INITIAL_CAPITAL });
         console.log("✅ Faucet transfer complete!");
       } else {
-        console.warn("⚠️ No OPENFORT_FAUCET_ID configured — skipping auto-fund.");
+        console.warn("⚠️ No FAUCET_PRIVATE_KEY configured — skipping auto-fund.");
       }
     } catch (e: any) {
       console.error("⚠️ Faucet transfer failed (agent still approved):", e.message);
