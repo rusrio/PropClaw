@@ -26,9 +26,11 @@ db.exec(`
     status TEXT DEFAULT 'active'
   );
 
+  DROP TABLE IF EXISTS funded_wallets;
+
   CREATE TABLE IF NOT EXISTS funded_wallets (
     address TEXT PRIMARY KEY,
-    private_key TEXT NOT NULL,
+    api_id TEXT NOT NULL,
     assigned_to TEXT
   );
 `);
@@ -83,8 +85,8 @@ export function getWalletForAgent(agentId: string): FundedWallet | null {
 
 export function saveWallet(wallet: FundedWallet) {
   const stmt = db.prepare(`
-    INSERT OR IGNORE INTO funded_wallets (address, private_key, assigned_to)
-    VALUES (@address, @privateKey, @assigned_to)
+    INSERT OR IGNORE INTO funded_wallets (address, api_id, assigned_to)
+    VALUES (@address, @apiId, @assigned_to)
   `);
   stmt.run(wallet);
 }

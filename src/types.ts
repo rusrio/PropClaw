@@ -55,7 +55,7 @@ export interface Agent {
 }
 
 export interface FundedWallet {
-  privateKey: `0x${string}`;
+  apiId: string; // Openfort backend account ID (e.g. acc_...)
   address: string;
   assigned_to: string | null; // agent_id or null if free
 }

@@ -26,6 +26,7 @@ import {
   assignWallet,
   getFundedWalletsCount
 } from "./db.js";
+import Openfort from "@openfort/openfort-node";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -34,15 +35,16 @@ const PORT = parseInt(process.env.PORT || "3000", 10);
 const isTestnet = process.env.HYPERLIQUID_TESTNET === "true";
 const bypassPnl = process.env.BYPASS_PNL_CHECK === "true";
 
+// ─── Openfort TEE Setup ─────────────────────────────────────────────────────
+
+const openfort = new Openfort(process.env.OPENFORT_API_KEY!, {
+  walletSecret: process.env.OPENFORT_WALLET_SECRET,
+});
+
 // ─── Database Initialization ────────────────────────────────────────────────
 
-// Load funded wallets from env into DB if they don't exist
-const rawKeys = (process.env.FUNDED_WALLETS || "").split(",").filter(Boolean);
-for (const key of rawKeys) {
-  const pk = (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`;
-  const account = privateKeyToAccount(pk);
-  saveWallet({ privateKey: pk, address: account.address, assigned_to: null });
-}
+// We no longer preload private keys from the environment.
+// Funded wallets are generated or assigned dynamically via Openfort TEE on evaluate.
 
 // ─── Hyperliquid ────────────────────────────────────────────────────────────
 
@@ -185,11 +187,17 @@ app.post("/evaluate", async (req, res) => {
       return;
     }
 
-    // 4. Assign funded wallet
-    const wallet = getAvailableWallet();
+    // 4. Assign or Create funded wallet via Openfort
+    let wallet = getAvailableWallet();
     if (!wallet) {
-      res.status(503).json({ error: "No funded wallets available. Try again later." });
-      return;
+      // Create a new Backend Wallet in the TEE for this approved agent
+      const newAccount = await openfort.accounts.evm.backend.create();
+      wallet = {
+        apiId: newAccount.id,
+        address: newAccount.address,
+        assigned_to: null
+      };
+      saveWallet(wallet);
     }
 
     // 5. Get initial capital
@@ -280,8 +288,8 @@ app.post("/trade", async (req, res) => {
     } catch { /* balance check may fail, proceed with trade */ }
 
     // Execute trade
-    const account = privateKeyToAccount(wallet.privateKey);
-    const exchangeClient = new hl.ExchangeClient({ wallet: account, transport });
+    const account = await openfort.accounts.evm.backend.get({ id: wallet.apiId });
+    const exchangeClient = new hl.ExchangeClient({ wallet: account as any, transport });
     
     // Look up coin index
     const meta = await infoClient.meta();
@@ -418,8 +426,9 @@ app.post("/cancel", async (req, res) => {
       return;
     }
 
-    const account = privateKeyToAccount(wallet.privateKey);
-    const exchangeClient = new hl.ExchangeClient({ wallet: account, transport });
+    // Replaced privateKeyToAccount with Openfort TEE wrapped account
+    const account = await openfort.accounts.evm.backend.get({ id: wallet.apiId });
+    const exchangeClient = new hl.ExchangeClient({ wallet: account as any, transport });
 
     const result = await exchangeClient.cancel({
       cancels: [{
