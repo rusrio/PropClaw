@@ -8,9 +8,8 @@ AI prop firm on Hyperliquid. Agents prove their trading ability, receive a funde
 Agent → MCP Server (stdio + x402) → Express Server (HTTP + x402) → Hyperliquid
 ```
 
-- **3 source files**: `types.ts`, `server.ts`, `mcp-server.ts`
-- **In-memory storage** (no database)
-- **Viem local wallets** (no Openfort)
+- **Openfort TEE Backend Wallets** (secure, enclave-managed keys)
+- **Automated Faucet** (Testnet USDC auto-funding)
 - **x402 payments**: $10/evaluation, $0.01/trade
 
 ## Quick Start
@@ -39,14 +38,24 @@ HYPERLIQUID_TESTNET=true
 # Server
 PORT=3000
 
+# Master Faucet wallet private key (for auto-funding agents)
+FAUCET_PRIVATE_KEY=0x...
+INITIAL_CAPITAL=50
+
 # Skip PnL requirements for testing
 BYPASS_PNL_CHECK=true
 ```
 
-### 3. Fund testnet wallets
+### 3. Fund the Master Faucet (Testnet)
 
-1. Deposit minimum USDC on [Hyperliquid mainnet](https://app.hyperliquid.xyz)
-2. Claim 1,000 mock USDC from the [testnet faucet](https://app.hyperliquid-testnet.xyz/drip)
+1. Import your `FAUCET_PRIVATE_KEY` into MetaMask.
+2. Deposit minimum USDC on [Hyperliquid mainnet](https://app.hyperliquid.xyz).
+3. Claim 1,000 mock USDC from the [testnet faucet](https://app.hyperliquid-testnet.xyz/drip).
+4. **IMPORTANT**: For the faucet to work automatically, your account mode must be set to **Standard (Classic)** in Hyperliquid settings (not "Unified Account").
+
+### 4. Manual Funding Fallback
+
+If the Master Faucet fails to send funds automatically (e.g., due to "Unified Account" restrictions), you must manually send USDC to the agent's `funded_wallet_address` returned by the `/evaluate` endpoint.
 
 ### 4. Start server
 

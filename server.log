@@ -1,10 +1,6 @@
+nohup: ignoring input
 🚀 AI Prop Firm running on :3000
    Hyperliquid: testnet
    PnL bypass: true
    Funded wallets: 0 (0 free)
    x402 receiver: 0x084675DB8E8a7cACEC514c5928D4e1A5c0a0F73D
-Requesting new Backend Wallet from Openfort TEE...
-Successfully created TEE wallet: acc_f82f1e8c-8585-412c-ab45-5537d00b1ba8
-💰 Faucet TEE wallet loaded: 0x6014ac9d823c75b65460770bc7039bca8556c5a1
-💸 Transferring 100 USDC from Faucet → 0xadac96f20b9fdb42b85944e044e1dcc4bd0c3398
-⚠️ Faucet transfer failed (agent still approved): Insufficient balance for withdrawal.

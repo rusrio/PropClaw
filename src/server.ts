@@ -228,17 +228,35 @@ app.post("/evaluate", async (req, res) => {
     }
 
     // 5. Auto-fund from Master Faucet wallet
+    let faucetStatus = "skipped";
     try {
       const faucet = getFaucetClient();
       if (faucet) {
         console.log(`💸 Transferring ${INITIAL_CAPITAL} USDC from Faucet → ${wallet.address}`);
-        await faucet.usdSend({ destination: wallet.address as `0x${string}`, amount: INITIAL_CAPITAL });
-        console.log("✅ Faucet transfer complete!");
+        try {
+          await faucet.usdSend({ destination: wallet.address as `0x${string}`, amount: INITIAL_CAPITAL });
+          console.log("✅ Faucet transfer complete (usdSend)!");
+          faucetStatus = "success";
+        } catch (usdSendError: any) {
+          if (usdSendError.message?.includes("unified account") || usdSendError.message?.includes("action disabled")) {
+            console.log("ℹ️ Unified account detected, attempting spotSend fallback...");
+            await faucet.spotSend({ 
+              destination: wallet.address as `0x${string}`, 
+              token: "USDC:0xeb62eee3685fc4c43992febcd9e75443", 
+              amount: INITIAL_CAPITAL 
+            });
+            console.log("✅ Faucet transfer complete (spotSend)!");
+            faucetStatus = "success";
+          } else {
+            throw usdSendError;
+          }
+        }
       } else {
         console.warn("⚠️ No FAUCET_PRIVATE_KEY configured — skipping auto-fund.");
       }
     } catch (e: any) {
-      console.error("⚠️ Faucet transfer failed (agent still approved):", e.message);
+      console.error("⚠️ Faucet transfer failed:", e.message);
+      faucetStatus = `failed: ${e.message}. Please fund manually to ${wallet.address}`;
     }
 
     // 6. Get initial capital
@@ -269,6 +287,7 @@ app.post("/evaluate", async (req, res) => {
       status: metrics.passes ? "approved" : "approved_bypass",
       agent,
       metrics,
+      faucet_status: faucetStatus,
       auth_message: expectedMessage,
     });
   } catch (err) {
